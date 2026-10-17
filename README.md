@@ -265,3 +265,23 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 **Note**: This tool modifies system power settings and display configurations. Please test in a safe environment before deploying on critical systems.
+
+---
+
+## 💬 Connect
+
+[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-illnar--io-ea4aaa?logo=github-sponsors&logoColor=white)](https://github.com/sponsors/illnar-io)
+[![Telegram](https://img.shields.io/badge/Telegram-ILLnar-26A5E4?logo=telegram&logoColor=white)](https://t.me/ILLnar)
+[![GitHub](https://img.shields.io/badge/GitHub-illnar--io-181717?logo=github&logoColor=white)](https://github.com/illnar-io)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-illnar-0077B5?logo=linkedin&logoColor=white)](https://linkedin.com/in/illnar)
+[![Email](https://img.shields.io/badge/Email-nizametdinov%40gmail.com-D14836?logo=gmail&logoColor=white)](mailto:nizametdinov@gmail.com)
+
+## 💝 Support the Project
+
+If my work helps you, consider supporting its development:
+
+- ⭐ **GitHub Sponsors**: <https://github.com/sponsors/illnar-io>
+- **Ko-Fi**: <https://ko-fi.com/illnar>
+- **PayPal**: [nizametdinov@gmail.com](mailto:nizametdinov@gmail.com)
+- **Bunq**: <https://bunq.me/INizametdinov>
+- **Revolut**: `@illnar_nizami`
