@@ -1,32 +1,21 @@
-# Python
+# Python bytecode
 __pycache__/
 *.py[cod]
-*.pyo
-*.egg-info/
-dist/
-build/
-*.egg
-*.whl
 
 # Virtual environments
 venv/
 .venv/
-env/
-.env/
 
-# IDE
+# Test tooling (pytest is the planned runner, see AUDIT.md F18)
+.pytest_cache/
+
+# Editor / OS junk
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-
-# OS
 .DS_Store
-Thumbs.db
 
-# Logs (local testing)
+# Local state (the daemon writes to ~/.local/state/power-hz)
 *.log
-
-# Config (contains system-specific paths)
-/etc/power-manager.conf

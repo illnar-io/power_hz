@@ -1,0 +1,16 @@
+[Unit]
+Description=power-hz - lowest refresh rate and capped brightness on battery
+Documentation=https://github.com/illnar-io/power_hz
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/power-hz
+Restart=on-failure
+RestartSec=5
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
+
+[Install]
+WantedBy=graphical-session.target

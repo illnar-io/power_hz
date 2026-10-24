@@ -1,287 +1,165 @@
-# Enhanced Power Manager for Fedora/Nobara Linux
+# power_hz
 
-An intelligent power management system for Fedora-based distributions that automatically optimizes display refresh rates, GPU performance, and system power consumption based on battery status and system capabilities.
+[![tests](https://github.com/illnar-io/power_hz/actions/workflows/tests.yml/badge.svg)](https://github.com/illnar-io/power_hz/actions/workflows/tests.yml)
 
-## Features
+Drops the laptop panel to its lowest refresh rate when you unplug, and puts it
+back when you plug in. Optionally caps brightness on battery, and switches the
+TuneD profile to a powersave variant.
 
-### 🔋 Intelligent Battery Management
-- **Automatic mode selection** based on battery level and power consumption
-- **Ultra power saving mode** for critical battery levels (<20%)
-- **Smart power consumption monitoring** with real-time metrics
+Verified on Fedora 45 Workstation, GNOME 51 (Mutter 51), AMD Radeon iGPU,
+2560x1600 @ 120 / 90 / 60 Hz panel with VRR.
 
-### 🖥️ Advanced Display Management
-- **Dynamic refresh rate switching** (supports rates from 24Hz to 240Hz+)
-- **Variable Refresh Rate (VRR/FreeSync/G-Sync)** detection and optimization
-- **Low refresh rate support** for maximum power savings (24Hz, 30Hz, 48Hz, 50Hz)
-- **OLED panel optimizations** with burn-in prevention
+**This is a GNOME/Wayland tool.** It talks to Mutter's `DisplayConfig` D-Bus API.
+X11, KDE, wlroots, COSMIC and Hyprland need a different backend and are not
+implemented yet.
 
-### ⚡ System Performance Optimization
-- **GPU power state management** (Intel/AMD)
-- **Panel Self Refresh (PSR)** and **Frame Buffer Compression (FBC)** support
-- **Content Adaptive Backlight Control (CABC)** for supported displays
-- **DPMS power management** with aggressive sleep timers
+## Why this exists
 
-### 📊 Monitoring & Metrics
-- **Real-time performance monitoring** with detailed logging
-- **Power consumption tracking** 
-- **Battery status analysis** with time remaining estimates
-- **Refresh rate monitoring** and optimization suggestions
+Every other power tool owns CPU and GPU knobs, and none of them touch the panel:
 
-## Compatibility
+| Project | Refresh rate | Brightness | CPU/GPU |
+|---|---|---|---|
+| power-profiles-daemon | no (deliberately) | no | 3 profiles |
+| tuned / tuned-ppd | panel ABM only (`[video]`) | no | yes |
+| TLP | no | no | yes |
+| auto-cpufreq | no | no | yes |
+| GNOME (`gsd-power`) | no | idle-dim, low-battery profile | via ppd |
 
-### Supported Systems
-- **Fedora 40/41/42** (including Fedora Workstation, KDE Spin)
-- **Nobara Linux** (all versions)
-- **Other Fedora derivatives** (RHEL, CentOS Stream with GNOME/KDE)
+So `power_hz` owns the display mode (and optionally brightness), and delegates
+CPU/GPU to `tuned-ppd` by switching its profile via `tuned-adm` on battery.
+It never writes `/sys` and never calls `powerprofilesctl`.
 
-### Desktop Environments
-- **GNOME 45/46/47/48** (primary support)
-- **KDE Plasma** (experimental)
-- **Wayland** and **X11** display servers
+## Install
 
-### Hardware Support
-- **Intel integrated graphics** (full support)
-- **AMD GPUs** (basic support)
-- **NVIDIA GPUs** (limited support)
-- **All display types** (LCD, LED, OLED, IPS, TN, VA, QLED)
-
-## Installation
-
-### Prerequisites
-```bash
-# Install required dependencies
-sudo dnf install -y acpi xorg-x11-server-utils brightnessctl python3 python3-pip
+```sh
+./install.sh
 ```
 
-### Quick Install
-```bash
-# Clone the repository
-git clone https://github.com/illnar-io/power_hz.git
-cd power_hz
+That symlinks `power_hz.py` to `~/.local/bin/power-hz`, installs the
+`--user` unit, enables and starts it. It also adds a sudoers rule so the
+daemon can run `tuned-adm profile` for the configured battery profile
+(and the AC restore profiles). No other root access, nothing written to `/sys`.
 
-# Install Python dependencies
-pip3 install -r requirements.txt
-
-# Make the script executable
-chmod +x power_manager.py
-
-# Install system-wide (optional)
-sudo cp power_manager.py /usr/local/bin/power-manager
+```sh
+systemctl --user status power-hz
+journalctl --user -u power-hz -f
+./install.sh                    # idempotent
+systemctl --user disable --now power-hz   # uninstall (restores the display first)
 ```
 
-### Systemd Service Installation (Recommended)
-```bash
-# Create systemd service file
-sudo tee /etc/systemd/system/power-manager.service << EOF
-[Unit]
-Description=Enhanced Power Manager
-After=graphical-session.target
+## Behaviour
 
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/power-manager
-Restart=on-failure
-User=root
-Environment=PYTHONUNBUFFERED=1
+| State | Refresh rate | Brightness | TuneD profile |
+|---|---|---|---|
+| On battery | lowest rate at the current resolution, VRR off | capped at 70 % of max, only if currently higher | `powersave` (or configured `battery_power_profile`) |
+| On AC | the mode you had before unplugging (any rate, VRR included) | restored, if the daemon dimmed it | restored to the pre-unplug profile |
+| `systemctl --user stop` | same restore | same restore | same restore |
+| Daemon killed and restarted on battery | baseline kept in `~/.local/state/power-hz/state.json` | same | baseline kept |
 
-[Install]
-WantedBy=multi-user.target
-EOF
+* Applies 2 s after the power event, so a flapping USB-C cable causes one change.
+* Never raises brightness, never forces max refresh on AC, never touches an
+  external monitor.
+* If you change the mode or brightness yourself while unplugged, your choice
+  wins on re-plug.
+* If you change the TuneD profile yourself while unplugged, your choice
+  wins on re-plug.
+* On battery with a cap configured (below 100), GNOME's *Automatic Screen
+  Brightness* is switched off, and back on when you plug in or stop the daemon.
+  Without that, the ambient-light sensor recomputes the level within seconds and
+  overrides the cap. It is the only setting the daemon changes outside the
+  display; with `battery_brightness_cap = 100` it is never touched.
 
-# Enable and start the service
-sudo systemctl enable power-manager.service
-sudo systemctl start power-manager.service
-```
+## Configuration
 
-## Usage
-
-### Manual Execution
-```bash
-# Run with default settings
-python3 power_manager.py
-
-# Run with specific power mode
-POWER_MODE=ultra python3 power_manager.py
-
-# Run with debug logging
-DEBUG=1 python3 power_manager.py
-```
-
-### Configuration
-
-The script automatically detects your system capabilities, but you can override settings:
-
-```bash
-# Environment variables
-export FORCE_REFRESH_RATE=60        # Force specific refresh rate
-export DISABLE_VRR=1                # Disable Variable Refresh Rate
-export ULTRA_BATTERY_THRESHOLD=15   # Ultra mode battery threshold
-export ENABLE_OLED_OPTIMIZATIONS=1  # Enable OLED-specific features
-```
-
-Or create a config file at `/etc/power-manager.conf`:
+Optional `~/.config/power-hz/config.ini`:
 
 ```ini
-[Settings]
-force_refresh_rate = 60
-disable_vrr = false
-ultra_battery_threshold = 15
-enable_oled_optimizations = true
-debug_mode = false
+[power-hz]
+battery_brightness_cap = 70
+battery_power_profile = powersave
 ```
 
-## How It Works
+* `battery_brightness_cap`: percent of max brightness on battery. `100` disables the
+  cap (and with it the auto-brightness switch). Bad values fall back to 70.
+* `battery_power_profile`: TuneD profile to activate on battery. Default is
+  `powersave` which maps to `laptop-battery-powersave` on battery (EPP=power,
+  boost=0, platform low-power, panel ABM=3). Set to `none` to disable profile
+  switching. The profile is switched via `tuned-adm` which requires root; the
+  install script adds a restricted `NOPASSWD` sudoers rule for the configured
+  profile(s).
 
-### 1. System Detection Phase
-- **Display capability detection** via `xrandr`, `gnome-randr`, and DRM
-- **EDID analysis** for panel type and supported features
-- **Hardware power management** feature detection (PSR, FBC, CABC)
-- **VRR support** and refresh rate range detection
+## Panel
 
-### 2. Intelligent Mode Selection
-- **Battery level analysis** (Critical <20%, Low <50%, Normal 50%+)
-- **Power consumption monitoring** (switches to ultra mode if >15W)
-- **Time remaining calculation** (ultra mode if <2 hours remaining)
-- **Hardware-specific optimizations** based on detected panel type
+The verified panel is a BOE **NE140QDM-NX1/NX2** (the EDID reports `NX2`),
+2560x1600, 14", on eDP. Its real range is **48–120 Hz, continuous**, but the
+kernel only exposes three discrete modes:
 
-### 3. Power Optimization
-- **Refresh rate adjustment** (24-30Hz for ultra saving, 60Hz standard, max Hz on AC)
-- **GPU frequency scaling** (reduces boost clocks by 20% in ultra mode)
-- **Display brightness control** (40% standard battery, 20% ultra mode)
-- **Background service management** (disables non-essential services)
+| Mode | Pixel clock | Source |
+|---|---|---|
+| 2560x1600 @ 120.000 Hz | 538.56 MHz | EDID detailed timing |
+| 2560x1600 @ 90.000 Hz | 403.92 MHz | EDID detailed timing |
+| 2560x1600 @ 60.002 Hz | 269.29 MHz | DisplayID 1.3 |
 
-### 4. Continuous Monitoring
-- **30-second metric collection** with performance logging
-- **Automatic mode switching** based on changing conditions
-- **Power consumption trending** for predictive adjustments
+Mutter reports `min-refresh-rate: 48` for VRR, which is where Settings' "48–120
+Hz" comes from. 48 Hz is the panel's floor, not a mode: the daemon's policy
+already picks the lowest available rate, so if the kernel ever offers 48, it is
+selected with no code change. To offer it, add a custom mode (root, reboot):
 
-## Advanced Features
-
-### OLED Display Support
-- **Burn-in prevention** with variable refresh rates
-- **Dark theme enforcement** for power savings
-- **Pixel shifting** where supported by hardware
-- **Aggressive screensaver** activation (3 minutes on battery)
-
-### Low Refresh Rate Modes
-- **24Hz mode** for video content and maximum battery life
-- **30Hz mode** for general computing tasks
-- **48Hz mode** for balanced performance/efficiency
-- **Variable rates** for VRR-capable displays
-
-### Hardware-Specific Optimizations
-- **Intel PSR/FBC** utilization for integrated graphics
-- **AMD PowerPlay** integration for discrete GPUs
-- **CABC support** for adaptive backlight control
-- **DPMS timing** optimization for display sleep
-
-## Troubleshooting
-
-### Common Issues
-
-**Script doesn't detect refresh rates:**
-```bash
-# Check display connection
-xrandr --listmonitors
-
-# Verify DRM capabilities
-ls -la /sys/class/drm/card*/card*-*/modes
+```
+# /etc/kernel/cmdline or GRUB_CMDLINE_LINUX, then regenerate the boot entry
+video=eDP-1:2560x1600MR@48
 ```
 
-**VRR not working:**
-```bash
-# Check kernel support
-cat /sys/class/drm/card*/card*-*/vrr_capable
+DRM's cmdline parser adds such a mode even when the EDID does not list it. Verify
+it locks before trusting it: a panel that refuses a non-standard timing can boot
+to a black internal screen. Drop the parameter and rebuild the boot entry to
+recover.
 
-# Verify compositor support (GNOME)
-gsettings get org.gnome.mutter experimental-features
+`+vrr` buys nothing at an equal rate: +0.36 W against fixed 60 Hz, inside the
+±0.4 W run-to-run drift. The daemon stays on the fixed lowest rate because it
+is predictable, and at an equal rate VRR is free but not better.
+
+Measured on this panel with the screen held awake (energy integral, mode and
+DPMS checked every sample, brightness pinned at 70 %):
+
+| Mode | Draw |
+|---|---|
+| 2560x1600 @ 60.002 | 7.4 – 10.0 W |
+| 2560x1600 @ 60.002+vrr | 10.4 W |
+| 2560x1600 @ 120.000+vrr | 10.1 – 10.2 W (two runs, 0.06 W apart) |
+
+The 120 Hz penalty was **1–3 W on an idle desktop**, where VRR can drop the
+panel to its 48 Hz floor. A single busier run read 4.8 W, but that machine's
+background load moved by the same amount between segments, so it is not a
+number to quote. Treat the saving as "a couple of watts, more when something on
+screen is actually animating" — which is exactly the case a fixed 60 Hz cap
+removes.
+
+## Tests
+
+```sh
+python3 -m pytest -q tests
 ```
 
-**Battery detection fails:**
-```bash
-# Check ACPI support
-acpi -V
+The policy and the power-state machine are tested against a real
+`GetCurrentState` capture from a 120/90/60 Hz VRR panel
+(`tests/fixtures/display_state.json`), with a fake panel and settings store, so no
+hardware is needed. CI runs the suite on every push.
 
-# Verify power supply sysfs
-ls -la /sys/class/power_supply/
-```
+## Known limits
 
-### Debug Mode
-```bash
-# Enable verbose logging
-DEBUG=1 python3 power_manager.py
+* GNOME's idle-dim still runs on battery. If the daemon caps while the screen is
+  already dimmed, waking the screen can bring back the pre-dim level; the next
+  plug/unplug re-applies the cap.
+* VRR is switched by choosing the `+vrr` mode variant; there is no separate
+  toggle in Mutter's API.
+* The gain depends entirely on the panel: the LCD controller draws power per
+  refresh, so 120→60 Hz helps on a high-refresh panel and does nothing on a
+  60 Hz one. This is not a "2x battery" feature; measure it before believing it.
 
-# Check logs
-tail -f /var/log/power-manager.log
-tail -f /var/log/power-manager-metrics.log
-```
+## History
 
-## Performance Impact
-
-### Battery Life Improvements
-- **30-50% longer** battery life with ultra power saving mode
-- **15-25% improvement** with standard battery optimizations
-- **Minimal performance impact** for general computing tasks
-
-### Refresh Rate Benefits
-- **24Hz mode**: Up to 60% display power reduction
-- **30Hz mode**: Up to 50% display power reduction  
-- **Variable refresh**: 10-30% power savings during low activity
-
-## Contributing
-
-We welcome contributions! Please see our contributing guidelines:
-
-1. **Fork the repository**
-2. **Create a feature branch** (`git checkout -b feature/amazing-feature`)
-3. **Commit your changes** (`git commit -m 'Add amazing feature'`)
-4. **Push to the branch** (`git push origin feature/amazing-feature`)
-5. **Open a Pull Request**
-
-### Areas for Contribution
-- **Additional hardware support** (NVIDIA GPUs, exotic displays)
-- **Desktop environment support** (KDE, XFCE, etc.)
-- **Power optimization algorithms** 
-- **GUI configuration interface**
-- **Additional distribution support**
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- **Fedora Project** for the excellent Linux distribution
-- **GNOME developers** for Wayland and power management APIs
-- **Intel/AMD** for open-source graphics drivers with power management
-- **Community contributors** for testing and feedback
-
-## Support
-
-- **Issues**: [GitHub Issues](https://github.com/illnar-io/power_hz/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/illnar-io/power_hz/discussions)
-- **Wiki**: [Project Wiki](https://github.com/illnar-io/power_hz/wiki)
-
----
-
-**Note**: This tool modifies system power settings and display configurations. Please test in a safe environment before deploying on critical systems.
-
----
-
-## 💬 Connect
-
-[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-illnar--io-ea4aaa?logo=github-sponsors&logoColor=white)](https://github.com/sponsors/illnar-io)
-[![Telegram](https://img.shields.io/badge/Telegram-ILLnar-26A5E4?logo=telegram&logoColor=white)](https://t.me/ILLnar)
-[![GitHub](https://img.shields.io/badge/GitHub-illnar--io-181717?logo=github&logoColor=white)](https://github.com/illnar-io)
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-illnar-0077B5?logo=linkedin&logoColor=white)](https://linkedin.com/in/illnar)
-[![Email](https://img.shields.io/badge/Email-nizametdinov%40gmail.com-D14836?logo=gmail&logoColor=white)](mailto:nizametdinov@gmail.com)
-
-## 💝 Support the Project
-
-If my work helps you, consider supporting its development:
-
-- ⭐ **GitHub Sponsors**: <https://github.com/sponsors/illnar-io>
-- **Ko-Fi**: <https://ko-fi.com/illnar>
-- **PayPal**: [nizametdinov@gmail.com](mailto:nizametdinov@gmail.com)
-- **Bunq**: <https://bunq.me/INizametdinov>
-- **Revolut**: `@illnar_nizami`
+The previous `power_manager.py` (955 lines, root systemd service, `xrandr`,
+GPU/PSR/CABC/theme/systemctl writes) never ran: it had a syntax error and
+mangled regexes. See `AUDIT.md` for the full write-up; everything it attempted is
+either deleted here or already owned by tuned-ppd/GNOME.
