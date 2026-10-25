@@ -1,16 +1,15 @@
 #!/usr/bin/python3
-"""power_hz - lowest refresh rate, capped brightness and a TuneD powersave
+"""power_hz - lowest refresh rate, capped brightness and PPD power-saver
 profile on battery, for GNOME.
 
-Runs as a systemd --user unit. Talks to D-Bus for the power state and the panel,
-and switches the TuneD profile with tuned-adm. Never writes sysfs.
+Runs as a systemd --user unit. Talks to D-Bus for the power state, the panel,
+and the PowerProfiles daemon (PPD). Never writes sysfs.
 """
 
 import configparser
 import json
 import os
 import signal
-import subprocess
 import sys
 import time
 
@@ -27,9 +26,8 @@ UPOWER = "org.freedesktop.UPower"
 UPOWER_PATH = "/org/freedesktop/UPower"
 PROPS = "org.freedesktop.DBus.Properties"
 POWER_SCHEMA = "org.gnome.settings-daemon.plugins.power"
-TUNED = "/usr/bin/tuned-adm"
-SUDO = "/usr/bin/sudo"
-PPD_CONF = "/etc/tuned/ppd.conf"
+PPD = "org.freedesktop.UPower.PowerProfiles"
+PPD_PATH = "/org/freedesktop/UPower/PowerProfiles"
 
 STATE_HOME = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
 CONFIG_HOME = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
@@ -38,7 +36,7 @@ CONFIG_FILE = os.path.join(CONFIG_HOME, "power-hz", "config.ini")
 
 DEBOUNCE_SECONDS = 2
 BRIGHTNESS_CAP = 70      # percent of max on battery; 100 disables the cap
-BATTERY_PROFILE = "powersave"   # TuneD profile on battery; "none" disables
+BATTERY_PPD_PROFILE = "power-saver"   # PPD profile on battery: "power-saver"|"balanced"|"performance"|"none"
 
 
 def log(message):
@@ -82,8 +80,7 @@ def cap_brightness(value, maximum, cap_percent=BRIGHTNESS_CAP):
 class PowerHz:
     def __init__(self, dry_run=False):
         self.dry_run = dry_run
-        self.cap, self.battery_profile = self._load_config()
-        self.tuned_ok = True
+        self.cap, self.battery_ppd_profile = self._load_config()
         self.state = self._load_state()
         self.system = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
         self.session = self._session_bus()
@@ -99,11 +96,11 @@ class PowerHz:
             parser.read(CONFIG_FILE)
             cap = int(parser.get("power-hz", "battery_brightness_cap",
                                   fallback=BRIGHTNESS_CAP))
-            profile = parser.get("power-hz", "battery_power_profile",
-                                 fallback=BATTERY_PROFILE).strip()
+            profile = parser.get("power-hz", "battery_ppd_profile",
+                                 fallback=BATTERY_PPD_PROFILE).strip()
         except (ValueError, configparser.Error) as exc:
             log(f"ignoring bad {CONFIG_FILE}: {exc}")
-            return BRIGHTNESS_CAP, BATTERY_PROFILE
+            return BRIGHTNESS_CAP, BATTERY_PPD_PROFILE
         return cap, None if profile.lower() in ("", "none", "off") else profile
 
     def _load_state(self):
@@ -198,96 +195,85 @@ class PowerHz:
             self.power_settings.set_boolean("ambient-enabled", enabled)
             log(f"ambient auto-brightness {'on' if enabled else 'off'}")
 
-    # -- tuned profile
+    # -- PPD profile via D-Bus (org.freedesktop.UPower.PowerProfiles)
 
-    def ac_profile(self, profile):
-        """The AC-side profile for one TuneD picked on battery.
-
-        tuned-ppd swaps balanced -> balanced-battery (and laptop-ac-powersave ->
-        laptop-battery-powersave) on unplug, so the profile visible on battery
-        is not the one to put back on AC. Reverse its own mapping."""
-        parser = configparser.ConfigParser()
+    def ppd_active(self):
         try:
-            parser.read(PPD_CONF)
-            for key, battery_profile in parser.items("battery"):
-                if battery_profile == profile:
-                    return parser.get("profiles", key, fallback=profile)
-        except (configparser.Error, OSError):
-            pass
-        return profile
-
-    def tuned_active(self):
-        try:
-            result = subprocess.run([TUNED, "active"], capture_output=True, text=True)
-        except OSError as exc:
-            log(f"cannot run tuned-adm: {exc}")
+            return self._property(self.system, PPD, PPD_PATH, PPD, "ActiveProfile")
+        except GLib.Error as exc:
+            log(f"PPD get ActiveProfile failed: {exc}")
             return None
-        if result.returncode != 0:
-            log(f"tuned-adm active failed: {result.stderr.strip()}")
-            return None
-        return result.stdout.rsplit(":", 1)[-1].strip() or None
 
-    def set_tuned_profile(self, name):
+    def ppd_set_profile(self, name):
         if self.dry_run:
-            log(f"dry-run: tuned-adm profile {name}")
+            log(f"dry-run: PPD set ActiveProfile {name}")
             return True
-        if not self.tuned_ok:
-            return False
         try:
-            result = subprocess.run([SUDO, "-n", TUNED, "profile", name],
-                                    capture_output=True, text=True)
-        except OSError as exc:
-            log(f"cannot run sudo: {exc}")
-            self.tuned_ok = False
+            self._call(self.system, PPD, PPD_PATH, PROPS, "Set",
+                       GLib.Variant("(ssv)", (PPD, "ActiveProfile",
+                                              GLib.Variant("s", name))))
+        except GLib.Error as exc:
+            log(f"PPD set ActiveProfile {name} failed: {exc}")
             return False
-        if result.returncode != 0:
-            log(f"tuned profile {name} failed: "
-                f"{(result.stderr or result.stdout).strip()}")
-            self.tuned_ok = False
-            return False
-        log(f"tuned profile -> {name}")
+        log(f"PPD profile -> {name}")
         return True
 
     def _sync_profile(self, battery):
-        if not self.battery_profile:
+        if not self.battery_ppd_profile:
             return
         applied = self.state.get("applied_profile")
-        if battery:
-            current = self.tuned_active()
-            if current is None or current == self.battery_profile:
-                return
-            baseline = self.state.get("baseline_profile") or self.ac_profile(current)
-            if self.set_tuned_profile(self.battery_profile):
-                self.state.update(baseline_profile=baseline,
-                                  applied_profile=self.battery_profile)
-                log(f"battery: tuned {current} -> {self.battery_profile}")
-            return
-        if not applied:
-            return
-        current = self.tuned_active()
+        current = self.ppd_active()
         if current is None:
             return
-        if current == applied:
+
+        if battery:
+            if current == self.battery_ppd_profile:
+                return
+            # Save AC baseline (captured continuously while on AC)
+            baseline = self.state.get("baseline_profile") or current
+            if self.ppd_set_profile(self.battery_ppd_profile):
+                self.state.update(baseline_profile=baseline,
+                                  applied_profile=self.battery_ppd_profile)
+                log(f"battery: PPD {current} -> {self.battery_ppd_profile}")
+            return
+
+        # On AC: if we applied a battery profile, restore baseline unless user changed it
+        if applied:
             baseline = self.state.get("baseline_profile")
-            if baseline and baseline != current:
-                if not self.set_tuned_profile(baseline):
-                    return
-                log(f"ac: tuned {current} -> {baseline}")
+            # PPD maps power-saver <-> balanced on AC/battery; if current is our
+            # applied profile or the PPD's AC mapping, restore baseline.
+            # Otherwise user deliberately changed it -> keep it.
+            if current == applied or (self.battery_ppd_profile == "power-saver" and current == "balanced") \
+                          or (self.battery_ppd_profile == "balanced" and current == "balanced"):
+                if baseline and baseline != current:
+                    if not self.ppd_set_profile(baseline):
+                        return
+                    log(f"ac: PPD {current} -> {baseline}")
+            else:
+                log(f"ac: PPD profile is {current} (user changed while on battery) - keeping it")
+            self.state.update(baseline_profile=None, applied_profile=None)
         else:
-            log(f"ac: tuned profile is {current} (changed while on battery) - keeping it")
-        self.state.update(baseline_profile=None, applied_profile=None)
+            # On AC with no applied profile: restore saved baseline if current is a battery profile
+            baseline = self.state.get("baseline_profile")
+            battery_profiles = ("power-saver", "balanced-battery")
+            if baseline and baseline != current and current in battery_profiles:
+                if self.ppd_set_profile(baseline):
+                    log(f"ac: PPD {current} -> {baseline} (restored baseline)")
+            else:
+                # Stable on AC: update baseline to current
+                self.state["baseline_profile"] = current
 
     def _restore_profile(self):
         applied = self.state.get("applied_profile")
         if not applied:
             return
-        current = self.tuned_active()
+        current = self.ppd_active()
         if current != applied:
             return
         baseline = self.state.get("baseline_profile")
         if baseline and baseline != current:
-            self.set_tuned_profile(baseline)
-            log(f"stop: tuned {current} -> {baseline}")
+            self.ppd_set_profile(baseline)
+            log(f"stop: PPD {current} -> {baseline}")
         self.state.update(baseline_profile=None, applied_profile=None)
 
     # -- the decision

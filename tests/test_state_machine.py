@@ -56,12 +56,11 @@ class FakePanel:
         self.brightness_set.append(value)
 
 
-def make(panel, ambient=True, cap=70, state=None, battery_profile="powersave"):
+def make(panel, ambient=True, cap=70, state=None, battery_ppd_profile="power-saver"):
     daemon = power_hz.PowerHz.__new__(power_hz.PowerHz)
     daemon.dry_run = False
     daemon.cap = cap
-    daemon.battery_profile = battery_profile
-    daemon.tuned_ok = True
+    daemon.battery_ppd_profile = battery_ppd_profile
     daemon.state = dict(state or {})
     daemon.debounce_id = 0
     daemon.reassert_id = 0
@@ -75,9 +74,9 @@ def make(panel, ambient=True, cap=70, state=None, battery_profile="powersave"):
     daemon.reasserts = 0
     daemon._save_state = lambda: setattr(daemon, "saves", daemon.saves + 1)
     daemon._schedule_reassert = lambda: setattr(daemon, "reasserts", daemon.reasserts + 1)
-    daemon.tuned_active = lambda: "throughput-performance"
-    daemon.set_tuned_profile = lambda name: setattr(daemon, "tuned_set", name) or True
-    daemon.tuned_set = None
+    daemon.ppd_active = lambda: "performance"
+    daemon.ppd_set_profile = lambda name: setattr(daemon, "ppd_set", name) or True
+    daemon.ppd_set = None
     return daemon
 
 
@@ -220,10 +219,10 @@ def test_battery_switches_tuned_profile():
     daemon = battery(panel)
     daemon.sync()
 
-    assert daemon.tuned_set == "powersave"
-    # Current mock returns throughput-performance which has no battery mapping
-    assert daemon.state["baseline_profile"] == "throughput-performance"
-    assert daemon.state["applied_profile"] == "powersave"
+    assert daemon.ppd_set == "power-saver"
+    # Current mock returns performance which has no battery mapping
+    assert daemon.state["baseline_profile"] == "performance"
+    assert daemon.state["applied_profile"] == "power-saver"
 
 
 def test_ac_restores_tuned_profile():
@@ -232,12 +231,12 @@ def test_ac_restores_tuned_profile():
     daemon.sync()
 
     panel.battery = False
-    # On AC, the current profile is still the one we set (powersave)
-    daemon.tuned_active = lambda: "powersave"
+    # On AC, the current profile is still the one we set (power-saver)
+    daemon.ppd_active = lambda: "power-saver"
     daemon.sync()
 
-    # Should restore the baseline (throughput-performance from our mock)
-    assert daemon.tuned_set == "throughput-performance"
+    # Should restore the baseline (performance from our mock)
+    assert daemon.ppd_set == "performance"
     assert daemon.state["applied_profile"] is None
     assert daemon.state["baseline_profile"] is None
 
@@ -248,20 +247,20 @@ def test_user_profile_change_on_battery_wins():
     daemon.sync()
 
     # User changes profile while on battery
-    daemon.tuned_active = lambda: "performance"
+    daemon.ppd_active = lambda: "performance"
     panel.battery = False
     daemon.sync()
 
     # Daemon should keep user's choice, not restore baseline
-    assert daemon.tuned_set == "powersave"  # unchanged from first sync
+    assert daemon.ppd_set == "power-saver"  # unchanged from first sync
     # On AC, we don't override if user changed it
 
 
 def test_battery_profile_none_disables_switching():
     panel = FakePanel()
     daemon = battery(panel)
-    daemon.battery_profile = None
+    daemon.battery_ppd_profile = None
     daemon.sync()
 
-    assert daemon.tuned_set is None
+    assert daemon.ppd_set is None
     assert "baseline_profile" not in daemon.state

@@ -4,7 +4,7 @@
 
 Drops the laptop panel to its lowest refresh rate when you unplug, and puts it
 back when you plug in. Optionally caps brightness on battery, and switches the
-TuneD profile to a powersave variant.
+PPD profile to `power-saver`.
 
 Verified on Fedora 45 Workstation, GNOME 51 (Mutter 51), AMD Radeon iGPU,
 2560x1600 @ 120 / 90 / 60 Hz panel with VRR.
@@ -26,8 +26,8 @@ Every other power tool owns CPU and GPU knobs, and none of them touch the panel:
 | GNOME (`gsd-power`) | no | idle-dim, low-battery profile | via ppd |
 
 So `power_hz` owns the display mode (and optionally brightness), and delegates
-CPU/GPU to `tuned-ppd` by switching its profile via `tuned-adm` on battery.
-It never writes `/sys` and never calls `powerprofilesctl`.
+CPU/GPU to the PowerProfiles daemon (PPD) by switching its profile via D-Bus
+on battery. It never writes `/sys` and never calls `powerprofilesctl`.
 
 ## Install
 
@@ -36,9 +36,7 @@ It never writes `/sys` and never calls `powerprofilesctl`.
 ```
 
 That symlinks `power_hz.py` to `~/.local/bin/power-hz`, installs the
-`--user` unit, enables and starts it. It also adds a sudoers rule so the
-daemon can run `tuned-adm profile` for the configured battery profile
-(and the AC restore profiles). No other root access, nothing written to `/sys`.
+`--user` unit, enables and starts it. No root, nothing outside your home.
 
 ```sh
 systemctl --user status power-hz
@@ -49,9 +47,9 @@ systemctl --user disable --now power-hz   # uninstall (restores the display firs
 
 ## Behaviour
 
-| State | Refresh rate | Brightness | TuneD profile |
+| State | Refresh rate | Brightness | PPD profile |
 |---|---|---|---|
-| On battery | lowest rate at the current resolution, VRR off | capped at 70 % of max, only if currently higher | `powersave` (or configured `battery_power_profile`) |
+| On battery | lowest rate at the current resolution, VRR off | capped at 70 % of max, only if currently higher | `power-saver` (or configured `battery_ppd_profile`) |
 | On AC | the mode you had before unplugging (any rate, VRR included) | restored, if the daemon dimmed it | restored to the pre-unplug profile |
 | `systemctl --user stop` | same restore | same restore | same restore |
 | Daemon killed and restarted on battery | baseline kept in `~/.local/state/power-hz/state.json` | same | baseline kept |
@@ -61,7 +59,7 @@ systemctl --user disable --now power-hz   # uninstall (restores the display firs
   external monitor.
 * If you change the mode or brightness yourself while unplugged, your choice
   wins on re-plug.
-* If you change the TuneD profile yourself while unplugged, your choice
+* If you change the PPD profile yourself while unplugged, your choice
   wins on re-plug.
 * On battery with a cap configured (below 100), GNOME's *Automatic Screen
   Brightness* is switched off, and back on when you plug in or stop the daemon.
@@ -76,17 +74,16 @@ Optional `~/.config/power-hz/config.ini`:
 ```ini
 [power-hz]
 battery_brightness_cap = 70
-battery_power_profile = powersave
+battery_ppd_profile = power-saver
 ```
 
 * `battery_brightness_cap`: percent of max brightness on battery. `100` disables the
   cap (and with it the auto-brightness switch). Bad values fall back to 70.
-* `battery_power_profile`: TuneD profile to activate on battery. Default is
-  `powersave` which maps to `laptop-battery-powersave` on battery (EPP=power,
-  boost=0, platform low-power, panel ABM=3). Set to `none` to disable profile
-  switching. The profile is switched via `tuned-adm` which requires root; the
-  install script adds a restricted `NOPASSWD` sudoers rule for the configured
-  profile(s).
+* `battery_ppd_profile`: PPD profile to activate on battery. Default is
+  `power-saver` (maps to tuned `laptop-battery-powersave`: EPP=power, boost=0,
+  platform low-power, panel ABM=3). Valid values: `power-saver`, `balanced`,
+  `performance`, or `none` to disable profile switching. Switched via D-Bus
+  to `org.freedesktop.UPower.PowerProfiles` (no root required).
 
 ## Panel
 
