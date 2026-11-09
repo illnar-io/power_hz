@@ -8,7 +8,6 @@ and the PowerProfiles daemon (PPD). Never writes sysfs.
 
 import configparser
 import fcntl
-import glob
 import json
 import os
 import signal
@@ -37,7 +36,7 @@ STATE_FILE = os.path.join(STATE_HOME, "power-hz", "state.json")
 CONFIG_FILE = os.path.join(CONFIG_HOME, "power-hz", "config.ini")
 
 DEBOUNCE_SECONDS = 2
-BRIGHTNESS_CAP = 70      # percent of max on battery; 100 disables the cap
+BRIGHTNESS_CAP = 25      # percent of max on battery; 100 disables the cap
 BATTERY_PPD_PROFILE = "power-saver"   # PPD profile on battery: "power-saver"|"balanced"|"performance"|"none"
 
 
@@ -77,22 +76,6 @@ def cap_brightness(value, maximum, cap_percent=BRIGHTNESS_CAP):
     return min(value, round(maximum * cap_percent / 100))
 
 
-def sysfs_brightness():
-    """Read the actual hardware brightness from sysfs (read-only).
-
-    Mutter's cached Backlight value can diverge from the hardware register when
-    gsd-power or another writer lands after us, so the cap re-assert must check
-    sysfs truth, not Mutter's cache.
-    """
-    for path in sorted(glob.glob("/sys/class/backlight/*/brightness")):
-        try:
-            with open(path) as f:
-                return int(f.read().strip())
-        except (OSError, ValueError):
-            continue
-    return None
-
-
 # ---------------------------------------------------------------------- daemon
 
 class PowerHz:
@@ -104,7 +87,6 @@ class PowerHz:
         self.session = self._session_bus()
         self.power_settings = Gio.Settings.new(POWER_SCHEMA)
         self.debounce_id = 0
-        self.reassert_id = 0
 
     # -- settings and state
 
@@ -329,19 +311,17 @@ class PowerHz:
                     if was_on:
                         self.set_ambient(False)
                     state["ambient_disabled"] = was_on
-                if backlight:
-                    capped = cap_brightness(value, maximum, self.cap)
-                    if capped < value:
-                        self.set_brightness(connector, capped)
-                        state["applied_brightness"] = capped
+            if self.cap < 100 and backlight:
+                capped = cap_brightness(value, maximum, self.cap)
+                if capped < value:
+                    self.set_brightness(connector, capped)
+                    state["applied_brightness"] = capped
             target = lowest_rate_mode(modes, size) or current
             if state.get("ambient_disabled"):
                 self.set_ambient(False)   # restart on battery: keep it parked
             if target != current:
                 self.apply_mode(display, connector, target)
             state["applied_mode"] = target
-            if state.get("applied_brightness") is not None:
-                self._schedule_reassert()
             log(f"battery: {current} -> {target}, brightness {value}"
                 f" -> {state.get('applied_brightness') or value}")
             self._sync_profile(battery=True)
@@ -361,7 +341,6 @@ class PowerHz:
             if state.get("ambient_disabled"):
                 self.set_ambient(True)
                 state["ambient_disabled"] = False
-            self._cancel_reassert()
             state.update(baseline_mode=target, applied_mode=None, applied_brightness=None,
                          baseline_brightness=restored if restored is not None else value)
             log(f"ac: {current} -> {target}, brightness {value}"
@@ -383,35 +362,8 @@ class PowerHz:
             self.set_ambient(True)
             self.state["ambient_disabled"] = False
         self._restore_profile()
-        self._cancel_reassert()
         self.state.update(applied_mode=None, applied_brightness=None)
         self._save_state()
-
-    # -- the cap is written once, but gsd can still land its own value right
-    # after we park the ambient sensor; keep lowering it back, never raise it.
-    # GNOME/settings-daemon (or the user) can land a higher value after our
-    # one-shot re-assert, so the cap is re-checked every DEBOUNCE_SECONDS while
-    # on battery and cancelled when we return to AC.
-
-    def _schedule_reassert(self):
-        self._cancel_reassert()
-        self.reassert_id = GLib.timeout_add_seconds(DEBOUNCE_SECONDS, self._reassert_cap)
-
-    def _cancel_reassert(self):
-        if self.reassert_id:
-            GLib.source_remove(self.reassert_id)
-            self.reassert_id = 0
-
-    def _reassert_cap(self):
-        applied = self.state.get("applied_brightness")
-        if applied is None:
-            return True
-        current = sysfs_brightness()
-        backlight = self.backlight()
-        if current is not None and backlight and current > applied:
-            self.set_brightness(backlight[0], applied)
-            log(f"cap re-asserted: {current} -> {applied}")
-        return True  # keep enforcing the cap until cancelled on AC
 
     # -- event loop
 

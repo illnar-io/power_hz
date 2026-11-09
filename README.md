@@ -57,7 +57,7 @@ Only one instance runs at a time: the daemon holds a lock in
 
 | State | Refresh rate | Brightness | PPD profile |
 |---|---|---|---|
-| On battery | lowest rate at the current resolution, VRR off | capped at `battery_brightness_cap` (default 70 %), only if currently higher | `power-saver` (or configured `battery_ppd_profile`) |
+| On battery | lowest rate at the current resolution, VRR off | capped at `battery_brightness_cap` (default 25 %), only if currently higher | `power-saver` (or configured `battery_ppd_profile`) |
 | On AC | the mode you had before unplugging (any rate, VRR included) | restored, if the daemon dimmed it | restored to the pre-unplug profile |
 | `systemctl --user stop` | same restore | same restore | same restore |
 | Daemon killed and restarted on battery | baseline kept in `~/.local/state/power-hz/state.json` | same | baseline kept |
@@ -81,12 +81,12 @@ Optional `~/.config/power-hz/config.ini`:
 
 ```ini
 [power-hz]
-battery_brightness_cap = 70
+battery_brightness_cap = 25
 battery_ppd_profile = power-saver
 ```
 
 * `battery_brightness_cap`: percent of max brightness on battery. `100` disables the
-  cap (and with it the auto-brightness switch). Bad values fall back to 70.
+  cap (and with it the auto-brightness switch). Bad values fall back to 25.
 * `battery_ppd_profile`: PPD profile to activate on battery. Default is
   `power-saver`. Valid values: `power-saver`, `balanced`, `performance`, or
   `none` to disable profile switching. The request goes through D-Bus to

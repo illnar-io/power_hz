@@ -97,7 +97,6 @@ def test_unplug_drops_to_lowest_rate_caps_and_parks_ambient():
     assert daemon.state["baseline_brightness"] == MAX
     assert daemon.state["applied_brightness"] == CAP
     assert daemon.state["ambient_disabled"] is True
-    assert daemon.reasserts == 1
     assert daemon.saves == 1
 
 
@@ -109,7 +108,6 @@ def test_battery_never_raises_a_brightness_below_the_cap():
     assert panel.brightness_set == []
     assert panel.value == 30000
     assert daemon.state["applied_brightness"] is None
-    assert daemon.reasserts == 0
 
 
 def test_replug_restores_mode_brightness_and_ambient():
@@ -160,7 +158,6 @@ def test_restart_on_battery_keeps_baseline_and_reparks_ambient():
     assert panel.brightness_set == []
     assert daemon.power_settings.enabled is False
     assert daemon.state["baseline_mode"] == BASELINE
-    assert daemon.reasserts == 1
 
 
 def test_battery_already_at_the_lowest_rate_does_not_reapply_it():
@@ -197,23 +194,6 @@ def test_stop_restores_what_the_daemon_changed():
     assert daemon.power_settings.enabled is True
     assert daemon.state["applied_mode"] is None
     assert daemon.state["applied_brightness"] is None
-
-
-def test_reassert_only_ever_lowers():
-    panel = FakePanel(value=MAX)
-    panel.battery = True
-    daemon = make(panel)
-    daemon.state["applied_brightness"] = CAP
-
-    # the re-assert reads sysfs truth, not Mutter's cache
-    power_hz.sysfs_brightness = lambda: panel.value
-    daemon._reassert_cap()
-    assert panel.value == CAP
-    assert panel.brightness_set == [CAP]
-
-    panel.value = 30000
-    daemon._reassert_cap()
-    assert panel.brightness_set == [CAP]  # below the cap: left alone
 
 
 def test_battery_switches_tuned_profile():
