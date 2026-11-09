@@ -4,7 +4,7 @@
 
 Drops the laptop panel to its lowest refresh rate when you unplug, and puts it
 back when you plug in. Optionally caps brightness on battery, and switches the
-PPD profile to `power-saver`.
+PPD profile (default `power-saver`).
 
 Verified on Fedora 45 Workstation, GNOME 51 (Mutter 51), AMD Radeon iGPU,
 2560x1600 @ 120 / 90 / 60 Hz panel with VRR.
@@ -45,11 +45,19 @@ journalctl --user -u power-hz -f
 systemctl --user disable --now power-hz   # uninstall (restores the display first)
 ```
 
+```sh
+power-hz --help          # usage
+power-hz --dry-run       # log what it would do, change nothing
+```
+
+Only one instance runs at a time: the daemon holds a lock in
+`$XDG_RUNTIME_DIR/power-hz.lock` and a second copy exits.
+
 ## Behaviour
 
 | State | Refresh rate | Brightness | PPD profile |
 |---|---|---|---|
-| On battery | lowest rate at the current resolution, VRR off | capped at 70 % of max, only if currently higher | `power-saver` (or configured `battery_ppd_profile`) |
+| On battery | lowest rate at the current resolution, VRR off | capped at `battery_brightness_cap` (default 70 %), only if currently higher | `power-saver` (or configured `battery_ppd_profile`) |
 | On AC | the mode you had before unplugging (any rate, VRR included) | restored, if the daemon dimmed it | restored to the pre-unplug profile |
 | `systemctl --user stop` | same restore | same restore | same restore |
 | Daemon killed and restarted on battery | baseline kept in `~/.local/state/power-hz/state.json` | same | baseline kept |
@@ -80,10 +88,11 @@ battery_ppd_profile = power-saver
 * `battery_brightness_cap`: percent of max brightness on battery. `100` disables the
   cap (and with it the auto-brightness switch). Bad values fall back to 70.
 * `battery_ppd_profile`: PPD profile to activate on battery. Default is
-  `power-saver` (maps to tuned `laptop-battery-powersave`: EPP=power, boost=0,
-  platform low-power, panel ABM=3). Valid values: `power-saver`, `balanced`,
-  `performance`, or `none` to disable profile switching. Switched via D-Bus
-  to `org.freedesktop.UPower.PowerProfiles` (no root required).
+  `power-saver`. Valid values: `power-saver`, `balanced`, `performance`, or
+  `none` to disable profile switching. The request goes through D-Bus to
+  `org.freedesktop.UPower.PowerProfiles` (no root required); tuned-ppd maps the
+  name to a tuned profile, so the CPU/EPP settings are whatever that mapping
+  defines.
 
 ## Panel
 
@@ -153,6 +162,13 @@ hardware is needed. CI runs the suite on every push.
 * The gain depends entirely on the panel: the LCD controller draws power per
   refresh, so 120→60 Hz helps on a high-refresh panel and does nothing on a
   60 Hz one. This is not a "2x battery" feature; measure it before believing it.
+* Decisions happen on power events, not on load. The daemon does not watch CPU
+  utilisation; `amd-pstate-epp` handles per-load frequency selection in
+  hardware.
+
+## Contact
+
+<illnar.io.io@gmail.com> · [issues](https://github.com/illnar-io/power_hz/issues)
 
 ## History
 
