@@ -7,6 +7,7 @@ and the PowerProfiles daemon (PPD). Never writes sysfs.
 """
 
 import configparser
+import fcntl
 import json
 import os
 import signal
@@ -448,6 +449,15 @@ def main():
         print(f"power-hz: unknown argument: {unknown[0]}", file=sys.stderr)
         print(USAGE, end="", file=sys.stderr)
         return 2
+
+    # Single instance: a second copy fights the first over ApplyMonitorsConfig.
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
+    lock = open(os.path.join(runtime_dir, "power-hz.lock"), "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        log("another instance is already running - exiting")
+        return 0
 
     PowerHz(dry_run="--dry-run" in args).run()
     return 0
