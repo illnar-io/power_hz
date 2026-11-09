@@ -430,9 +430,28 @@ class PowerHz:
         return GLib.SOURCE_REMOVE
 
 
+USAGE = """usage: power-hz [--dry-run]
+
+Drop the internal panel to its lowest refresh rate, cap brightness and apply a
+PPD profile while on battery; restore everything on AC. Runs as a
+systemd --user unit (power-hz.service).
+"""
+
+
 def main():
-    PowerHz(dry_run="--dry-run" in sys.argv).run()
+    args = sys.argv[1:]
+    if any(a in ("-h", "--help") for a in args):
+        print(USAGE, end="")
+        return 0
+    unknown = [a for a in args if a != "--dry-run"]
+    if unknown:
+        print(f"power-hz: unknown argument: {unknown[0]}", file=sys.stderr)
+        print(USAGE, end="", file=sys.stderr)
+        return 2
+
+    PowerHz(dry_run="--dry-run" in args).run()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
