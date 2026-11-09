@@ -205,6 +205,8 @@ def test_reassert_only_ever_lowers():
     daemon = make(panel)
     daemon.state["applied_brightness"] = CAP
 
+    # the re-assert reads sysfs truth, not Mutter's cache
+    power_hz.sysfs_brightness = lambda: panel.value
     daemon._reassert_cap()
     assert panel.value == CAP
     assert panel.brightness_set == [CAP]

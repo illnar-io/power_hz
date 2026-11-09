@@ -16,6 +16,15 @@ dates; the project has no tagged versions yet.
 - README documents the CLI flags, the single-instance behaviour, the actual
   configuration defaults and the event-driven (not load-driven) policy.
 
+### Fixed
+
+- Brightness cap not holding on battery: `_reassert_cap` compared against
+  Mutter's cached Backlight value, so when gsd-power (or another writer)
+  overridden the hardware register back to 100 %, the daemon saw its own cache
+  at the cap and never re-applied. The re-assert now reads the actual sysfs
+  brightness (read-only) and re-applies the cap every 2 seconds while on
+  battery, cancelled on AC.
+
 ## 2026-10-25
 
 ### Changed

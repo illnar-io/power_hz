@@ -8,6 +8,7 @@ and the PowerProfiles daemon (PPD). Never writes sysfs.
 
 import configparser
 import fcntl
+import glob
 import json
 import os
 import signal
@@ -74,6 +75,22 @@ def lowest_rate_mode(modes, size):
 def cap_brightness(value, maximum, cap_percent=BRIGHTNESS_CAP):
     """Only ever dims: never raises a brightness the user chose below the cap."""
     return min(value, round(maximum * cap_percent / 100))
+
+
+def sysfs_brightness():
+    """Read the actual hardware brightness from sysfs (read-only).
+
+    Mutter's cached Backlight value can diverge from the hardware register when
+    gsd-power or another writer lands after us, so the cap re-assert must check
+    sysfs truth, not Mutter's cache.
+    """
+    for path in sorted(glob.glob("/sys/class/backlight/*/brightness")):
+        try:
+            with open(path) as f:
+                return int(f.read().strip())
+        except (OSError, ValueError):
+            continue
+    return None
 
 
 # ---------------------------------------------------------------------- daemon
@@ -371,7 +388,10 @@ class PowerHz:
         self._save_state()
 
     # -- the cap is written once, but gsd can still land its own value right
-    # after we park the ambient sensor; lower it back once, never raise it
+    # after we park the ambient sensor; keep lowering it back, never raise it.
+    # GNOME/settings-daemon (or the user) can land a higher value after our
+    # one-shot re-assert, so the cap is re-checked every DEBOUNCE_SECONDS while
+    # on battery and cancelled when we return to AC.
 
     def _schedule_reassert(self):
         self._cancel_reassert()
@@ -383,13 +403,15 @@ class PowerHz:
             self.reassert_id = 0
 
     def _reassert_cap(self):
-        self.reassert_id = 0
         applied = self.state.get("applied_brightness")
+        if applied is None:
+            return True
+        current = sysfs_brightness()
         backlight = self.backlight()
-        if applied is not None and backlight and backlight[1] > applied:
+        if current is not None and backlight and current > applied:
             self.set_brightness(backlight[0], applied)
-            log(f"cap re-asserted: {backlight[1]} -> {applied}")
-        return GLib.SOURCE_REMOVE
+            log(f"cap re-asserted: {current} -> {applied}")
+        return True  # keep enforcing the cap until cancelled on AC
 
     # -- event loop
 
